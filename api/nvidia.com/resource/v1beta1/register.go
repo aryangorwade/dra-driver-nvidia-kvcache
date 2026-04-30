@@ -45,6 +45,10 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&ComputeDomainList{},
 		&ComputeDomainClique{},
 		&ComputeDomainCliqueList{},
+
+		// Types for KVCachePool
+		&KVCachePool{},
+		&KVCachePoolList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

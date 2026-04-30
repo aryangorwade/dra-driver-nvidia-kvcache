@@ -34,6 +34,10 @@ const (
 	ComputeDomainDaemonConfigKind  = "ComputeDomainDaemonConfig"
 	ComputeDomainKind              = "ComputeDomain"
 	ComputeDomainCliqueKind        = "ComputeDomainClique"
+
+	// Constants for KVCachePool
+	KVCachePoolKind       = "KVCachePool"
+	KVCachePoolConfigKind = "KVCachePoolConfig"
 )
 
 // Interface defines the set of common APIs for all configs
@@ -73,6 +77,10 @@ func init() {
 		&ComputeDomainDaemonConfig{},
 		&ComputeDomain{},
 		&ComputeDomainClique{},
+
+		// Types for KVCachePool
+		&KVCachePool{},
+		&KVCachePoolConfig{},
 	)
 	metav1.AddToGroupVersion(scheme, schemeGroupVersion)
 
