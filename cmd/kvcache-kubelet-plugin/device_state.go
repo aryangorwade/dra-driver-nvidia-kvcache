@@ -40,6 +40,12 @@ type DeviceState struct {
 	config                   *Config
 }
 
+type PreparedDevices []kubeletplugin.Device
+
+func (d PreparedDevices) GetDevices() []kubeletplugin.Device {
+	return d
+}
+
 func NewDeviceState(ctx context.Context, config *Config) (*DeviceState, error) {
 	cdi, err := NewCDIHandler(
 		WithCDIRoot(config.flags.cdiRoot),
@@ -94,8 +100,49 @@ func (s *DeviceState) Unprepare(ctx context.Context, claimRef kubeletplugin.Name
 }
 
 func (s *DeviceState) prepareDevices(ctx context.Context, claim *resourceapi.ResourceClaim) (PreparedDevices, error) {
-	// TODO: implement
-	return nil, nil
+	// Get all opaque configs intended for the driver
+	configs, err := GetOpaqueDeviceConfigs(
+		configapi.StrictDecoder,
+		DriverName,
+		claim.Status.Allocation.Devices.Config,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("error getting opaque device configs: %w", err)
+	}
+
+	// Find the specific KVCachePoolConfig and extract PoolID
+	var poolID string
+	var requests []string
+	for _, c := range configs {
+		if kvConfig, ok := c.Config.(*configapi.KVCachePoolConfig); ok {
+			poolID = kvConfig.PoolID
+			requests = c.Requests
+			break
+		}
+	}
+
+	if poolID == "" {
+		return nil, fmt.Errorf("no KVCachePoolConfig found in claim")
+	}
+
+	klog.Infof("Preparing KV Cache for Pool: %s", poolID)
+
+	// Construct the prepared device list.
+	// For DRA, we need to return at least one "Device" object that maps back to the requests.
+	// The CDIDeviceIDs will be used by the container runtime to find the right JSON file.
+	// We use the claim UID as the device name within the CDI spec.
+	cdiDeviceID := fmt.Sprintf("%s/%s=%s", cdiVendor, cdiClaimClass, string(claim.UID))
+
+	preparedDevices := PreparedDevices{
+		{
+			DeviceName:   string(claim.UID),
+			PoolName:     poolID,
+			Requests:     requests,
+			CDIDeviceIDs: []string{cdiDeviceID},
+		},
+	}
+
+	return preparedDevices, nil
 }
 
 // GetOpaqueDeviceConfigs returns an ordered list of the configs contained in possibleConfigs for this driver.
