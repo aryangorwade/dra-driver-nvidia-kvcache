@@ -111,10 +111,6 @@ func (d *driver) Shutdown() error {
 		return nil
 	}
 
-	if err := d.state.computeDomainManager.Stop(); err != nil {
-		return fmt.Errorf("error stopping ComputeDomainManager: %w", err)
-	}
-
 	if err := d.state.checkpointCleanupManager.Stop(); err != nil {
 		return fmt.Errorf("error stopping CheckpointCleanupManager: %w", err)
 	}

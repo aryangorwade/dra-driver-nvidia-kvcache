@@ -197,7 +197,7 @@ func newApp() *cli.App {
 	return app
 }
 
-// RunPlugin initializes and runs the compute domain kubelet plugin.
+// RunPlugin initializes and runs the kv cache DRA kubelet plugin.
 func RunPlugin(ctx context.Context, config *Config) error {
 	common.StartDebugSignalHandlers()
 
