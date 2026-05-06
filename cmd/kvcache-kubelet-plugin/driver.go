@@ -1,0 +1,239 @@
+/*
+Copyright The Kubernetes Authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"time"
+
+	resourceapi "k8s.io/api/resource/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/runtime"
+	coreclientset "k8s.io/client-go/kubernetes"
+	"k8s.io/dynamic-resource-allocation/kubeletplugin"
+	"k8s.io/klog/v2"
+
+	"sigs.k8s.io/dra-driver-nvidia-gpu/pkg/flock"
+	drametrics "sigs.k8s.io/dra-driver-nvidia-gpu/pkg/metrics"
+)
+
+const (
+	// ErrorRetryMaxTimeout limits the amount of time spent in the request
+	// handlers UnprepareResourceClaims() and PrepareResourceClaims(), so that
+	// we send a response to the kubelet in a predictable amount of time. Within
+	// that deadline, retryable errors are retried (with backoff) via the
+	// workqueue abstraction.
+	ErrorRetryMaxTimeout = 45 * time.Second
+	// DriverPrepUprepFlockPath is the path to a lock file used to make sure
+	// that calls to nodePrepareResource() / nodeUnprepareResource() never
+	// interleave, node-globally.
+	DriverPrepUprepFlockFileName = "pu.lock"
+)
+
+// permanentError defines an error indicating that it is permanent.
+// By default, every error will be retried up to ErrorRetryMaxTimeout.
+// Errors marked as permanent will not be retried.
+type permanentError struct{ error }
+
+func isPermanentError(err error) bool {
+	return errors.As(err, &permanentError{})
+}
+
+type driver struct {
+	client       coreclientset.Interface
+	pluginhelper *kubeletplugin.Helper
+	state        *DeviceState
+	pulock       *flock.Flock
+	healthcheck  *healthcheck
+}
+
+func NewDriver(ctx context.Context, config *Config) (*driver, error) {
+	state, err := NewDeviceState(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+
+	puLockPath := filepath.Join(config.DriverPluginPath(), DriverPrepUprepFlockFileName)
+
+	driver := &driver{
+		client: config.clientsets.Core,
+		state:  state,
+		pulock: flock.NewFlock(puLockPath),
+	}
+
+	helper, err := kubeletplugin.Start(
+		ctx,
+		driver,
+		kubeletplugin.KubeClient(driver.client),
+		kubeletplugin.NodeName(config.flags.nodeName),
+		kubeletplugin.DriverName(DriverName),
+		kubeletplugin.RegistrarDirectoryPath(config.flags.kubeletRegistrarDirectoryPath),
+		kubeletplugin.PluginDataDirectoryPath(config.DriverPluginPath()),
+	)
+	if err != nil {
+		return nil, err
+	}
+	driver.pluginhelper = helper
+
+	// Pass `nodeUnprepareResource` function in the cleanup manager.
+	if err := state.checkpointCleanupManager.Start(ctx, driver.nodeUnprepareResource); err != nil {
+		return nil, fmt.Errorf("error starting CheckpointCleanupManager: %w", err)
+	}
+
+	healthcheck, err := setupHealthcheckPrimitives(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("error setting up healtcheck primitives: %w", err)
+	}
+	driver.healthcheck = healthcheck
+
+	return driver, nil
+}
+
+func (d *driver) Shutdown() error {
+	if d == nil {
+		return nil
+	}
+
+	if err := d.state.computeDomainManager.Stop(); err != nil {
+		return fmt.Errorf("error stopping ComputeDomainManager: %w", err)
+	}
+
+	if err := d.state.checkpointCleanupManager.Stop(); err != nil {
+		return fmt.Errorf("error stopping CheckpointCleanupManager: %w", err)
+	}
+
+	if d.healthcheck != nil {
+		d.healthcheck.Stop()
+	}
+
+	d.pluginhelper.Stop()
+	return nil
+}
+
+func (d *driver) PrepareResourceClaims(ctx context.Context, claims []*resourceapi.ResourceClaim) (map[types.UID]kubeletplugin.PrepareResult, error) {
+	klog.V(6).Infof("PrepareResourceClaims called with %d claim(s)", len(claims))
+
+	results := make(map[types.UID]kubeletplugin.PrepareResult)
+
+	for _, claim := range claims {
+		_, res := d.nodePrepareResource(ctx, claim)
+		results[claim.UID] = res
+	}
+
+	return results, nil
+}
+
+func (d *driver) UnprepareResourceClaims(ctx context.Context, claimRefs []kubeletplugin.NamespacedObject) (map[types.UID]error, error) {
+	klog.V(6).Infof("UnprepareResourceClaims called with %d claim(s)", len(claimRefs))
+
+	results := make(map[types.UID]error)
+
+	for _, claim := range claimRefs {
+		_, err := d.nodeUnprepareResource(ctx, claim)
+		results[claim.UID] = err
+		if err != nil {
+			klog.V(0).Infof("Error unpreparing devices for claim %v: %v", claim.UID, err)
+		}
+	}
+
+	return results, nil
+}
+
+func (d *driver) HandleError(ctx context.Context, err error, msg string) {
+	// For now we just follow the advice documented in the DRAPlugin API docs.
+	// See: https://pkg.go.dev/k8s.io/apimachinery/pkg/util/runtime#HandleErrorWithContext
+	runtime.HandleErrorWithContext(ctx, err, msg)
+}
+
+// nodePrepareResource() returns a 2-tuple; the first value is a boolean
+// indicating whether the work is 'done', the second value is a result which can
+// also reflect an error. Set the boolean to `true` for any result wrapping a
+// non-retryable error.
+func (d *driver) nodePrepareResource(ctx context.Context, claim *resourceapi.ResourceClaim) (bool, kubeletplugin.PrepareResult) {
+	t0 := time.Now()
+
+	release, err := d.pulock.Acquire(ctx, flock.WithTimeout(10*time.Second))
+	if err != nil {
+		drametrics.IncNodePrepareError(DriverName, "lock_acquire")
+		res := kubeletplugin.PrepareResult{
+			Err: fmt.Errorf("error acquiring prep/unprep lock: %w", err),
+		}
+		return false, res
+	}
+	defer release()
+	doneInFlight := drametrics.TrackInFlight(DriverName, "prepare")
+	defer doneInFlight()
+
+	if claim.Status.Allocation == nil {
+		res := kubeletplugin.PrepareResult{
+			Err: fmt.Errorf("no allocation set in ResourceClaim %s in namespace %s", claim.Name, claim.Namespace),
+		}
+		return true, res
+	}
+
+	devs, err := d.state.Prepare(ctx, claim)
+	if err != nil {
+		drametrics.IncNodePrepareError(DriverName, "prepare_devices")
+		res := kubeletplugin.PrepareResult{
+			Err: fmt.Errorf("error preparing devices for claim '%s': %w", ResourceClaimToString(claim), err),
+		}
+		if isPermanentError(err) {
+			klog.Infof("Permanent error preparing devices for claim %v: %v", claim.UID, err)
+			return true, res
+		}
+		return false, res
+	}
+
+	klog.V(1).Infof("Prepared devices for claim '%s': %v", ResourceClaimToString(claim), devs)
+	drametrics.ObserveRequest(DriverName, "prepare", time.Since(t0))
+
+	return true, kubeletplugin.PrepareResult{Devices: devs}
+}
+
+// Return 2-tuple: the first value is a boolean indicating to the retry logic
+// whether the work is 'done'.
+func (d *driver) nodeUnprepareResource(ctx context.Context, claimRef kubeletplugin.NamespacedObject) (bool, error) {
+	tstart := time.Now()
+
+	release, err := d.pulock.Acquire(ctx, flock.WithTimeout(10*time.Second))
+	if err != nil {
+		drametrics.IncNodeUnprepareError(DriverName, "lock_acquire")
+		return false, fmt.Errorf("error acquiring prep/unprep lock: %w", err)
+	}
+	defer release()
+	doneInFlight := drametrics.TrackInFlight(DriverName, "unprepare")
+	defer doneInFlight()
+
+	if err := d.state.Unprepare(ctx, claimRef); err != nil {
+		drametrics.IncNodeUnprepareError(DriverName, "unprepare_devices")
+		return isPermanentError(err), fmt.Errorf("error unpreparing devices for claim '%v': %w", claimRef.String(), err)
+	}
+
+	klog.V(1).Infof("Unprepared devices for claim '%v'", claimRef.String())
+	drametrics.ObserveRequest(DriverName, "unprepare", time.Since(tstart))
+	return true, nil
+}
+
+// TODO: implement loop to remove CDI files from the CDI path for claimUIDs
+//       that have been removed from the AllocatedClaims map.
+// func (d *driver) cleanupCDIFiles(wg *sync.WaitGroup) chan error {
+// 	errors := make(chan error)
+// 	return errors
+// }
