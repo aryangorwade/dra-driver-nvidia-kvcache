@@ -30,17 +30,11 @@ import (
 	"k8s.io/component-base/logs"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
-
-	"sigs.k8s.io/dra-driver-nvidia-gpu/internal/common"
-	"sigs.k8s.io/dra-driver-nvidia-gpu/internal/info"
-	"sigs.k8s.io/dra-driver-nvidia-gpu/pkg/featuregates"
-	pkgflags "sigs.k8s.io/dra-driver-nvidia-gpu/pkg/flags"
-	"sigs.k8s.io/dra-driver-nvidia-gpu/pkg/metrics"
 )
 
 const (
-	DriverName                              = "kvcache.nvidia.com"
-	DriverPluginCheckpointFileBasename      = "checkpoint.json"
+	// TODO: change
+	DriverName = "kvcache.nvidia.com"
 )
 
 type Flags struct {

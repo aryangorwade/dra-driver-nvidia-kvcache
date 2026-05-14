@@ -39,18 +39,21 @@ const (
 
 // KVCachePool represents a logical pool of KV cache capacity that can be shared
 // across inference workloads. Workloads with compatible KV formats may share KV
-// blocks directly; workloads with incompatible KV formats may still allocate
-// separate, isolated slices from the same pool. The KVCachePool controller
+// blocks directly. The KVCachePool controller
 // reconciles this API object and coordinates capacity allocation. Actual KV
 // storage and transfer are provided either by the project's default compatible
 // data plane or by an explicitly configured external data-plane provider such as
 // LMCache or Dynamo. Workloads claim slices of pool capacity via standard K8s
 // ResourceClaims.
+//
+// NOTE: Future plans allow workloads with incompatible KV formats may allocate
+// separate, isolated slices from the same pool. This would involve creating 
+// a custom dataplane that does this.
 type KVCachePool struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   KVCachePoolSpec   `json:"spec,omitempty"`
+	Spec KVCachePoolSpec `json:"spec,omitempty"`
 	// Global KVCachePool status. Can be used to guide debugging efforts.
 	// Workload however should not rely on inspecting this field at any point
 	// during its lifecycle.
@@ -73,7 +76,7 @@ type KVCachePoolSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	CapacityBytes int64 `json:"capacityBytes"`
 
-	// LatencyTier describes the memory/storage tier backing the pool.
+	// LatencyTier describes the memory/storage tier backing the pool. TODO: HBM's direct GPU memory.
 	// +kubebuilder:validation:Enum=HBM;DRAM;Disk
 	// +kubebuilder:default=DRAM
 	LatencyTier string `json:"latencyTier,omitempty"`

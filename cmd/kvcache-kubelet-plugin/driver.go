@@ -92,11 +92,6 @@ func NewDriver(ctx context.Context, config *Config) (*driver, error) {
 	}
 	driver.pluginhelper = helper
 
-	// Pass `nodeUnprepareResource` function in the cleanup manager.
-	if err := state.checkpointCleanupManager.Start(ctx, driver.nodeUnprepareResource); err != nil {
-		return nil, fmt.Errorf("error starting CheckpointCleanupManager: %w", err)
-	}
-
 	healthcheck, err := setupHealthcheckPrimitives(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("error setting up healtcheck primitives: %w", err)
@@ -109,10 +104,6 @@ func NewDriver(ctx context.Context, config *Config) (*driver, error) {
 func (d *driver) Shutdown() error {
 	if d == nil {
 		return nil
-	}
-
-	if err := d.state.checkpointCleanupManager.Stop(); err != nil {
-		return fmt.Errorf("error stopping CheckpointCleanupManager: %w", err)
 	}
 
 	if d.healthcheck != nil {
