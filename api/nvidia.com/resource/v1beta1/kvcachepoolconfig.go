@@ -21,12 +21,13 @@ import (
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
-// KVCachePoolConfig holds the set of parameters for configuring a KVCachePool allocation.
+// KVCachePoolConfig holds (user-specified) parameters for a ResourceClaim
+// allocation from a KVCachePool.
 type KVCachePoolConfig struct {
 	metav1.TypeMeta `json:",inline"`
 	
-	// PoolID is the unique identifier of the KVCachePool being claimed.
-	PoolID string `json:"poolID"`
+	// PoolName is the name of the KVCachePool being claimed (KVCachePool.metadata.name).
+	PoolName string `json:"poolName"`
 	// CapacityBytes is the amount of capacity requested from the pool.
 	// +optional
 	CapacityBytes int64 `json:"capacityBytes,omitempty"`
@@ -37,7 +38,7 @@ func DefaultKVCachePoolConfig() *KVCachePoolConfig {
 	return &KVCachePoolConfig{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: GroupName + "/" + Version,
-			Kind:       KVCachePoolConfigKind, // We added this constant to api.go earlier
+			Kind:       KVCachePoolConfigKind,
 		},
 	}
 }
@@ -50,8 +51,8 @@ func (c *KVCachePoolConfig) Normalize() error {
 // Validate ensures the config has a valid set of values before the kubelet plugin tries to apply it.
 // Required to satisfy the v1beta1.Interface.
 func (c *KVCachePoolConfig) Validate() error {
-	if c.PoolID == "" {
-		return fmt.Errorf("poolID cannot be empty")
+	if c.PoolName == "" {
+		return fmt.Errorf("poolName cannot be empty")
 	}
 	if c.CapacityBytes < 1 {
 		return fmt.Errorf("capacityBytes must be at least 1")

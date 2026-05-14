@@ -40,12 +40,6 @@ type DeviceState struct {
 	config                   *Config
 }
 
-type PreparedDevices []kubeletplugin.Device
-
-func (d PreparedDevices) GetDevices() []kubeletplugin.Device {
-	return d
-}
-
 func NewDeviceState(ctx context.Context, config *Config) (*DeviceState, error) {
 	cdi, err := NewCDIHandler(
 		WithCDIRoot(config.flags.cdiRoot),
@@ -110,12 +104,12 @@ func (s *DeviceState) prepareDevices(ctx context.Context, claim *resourceapi.Res
 		return nil, fmt.Errorf("error getting opaque device configs: %w", err)
 	}
 
-	// Find the specific KVCachePoolConfig and extract PoolID
-	var poolID string
+	// Find the specific KVCachePoolConfig and extract PoolName
+	var poolName string
 	var requests []string
 	for _, c := range configs {
 		if kvConfig, ok := c.Config.(*configapi.KVCachePoolConfig); ok {
-			poolID = kvConfig.PoolID
+			poolName = kvConfig.PoolName
 			requests = c.Requests
 			break
 		}
