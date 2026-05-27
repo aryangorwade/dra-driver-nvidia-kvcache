@@ -25,7 +25,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
-	cdiapi "tags.cncf.io/container-device-interface/pkg/cdi"
 	configapi "sigs.k8s.io/dra-driver-nvidia-gpu/api/nvidia.com/resource/v1beta1"
 )
 
@@ -105,11 +104,11 @@ func (s *DeviceState) prepareDevices(ctx context.Context, claim *resourceapi.Res
 	}
 
 	// Find the specific KVCachePoolConfig and extract PoolName
-	var poolName string
+	var poolID string
 	var requests []string
 	for _, c := range configs {
 		if kvConfig, ok := c.Config.(*configapi.KVCachePoolConfig); ok {
-			poolName = kvConfig.PoolName
+			poolID = kvConfig.PoolName
 			requests = c.Requests
 			break
 		}
@@ -121,19 +120,20 @@ func (s *DeviceState) prepareDevices(ctx context.Context, claim *resourceapi.Res
 
 	klog.Infof("Preparing KV Cache for Pool: %s", poolID)
 
-	// Construct the prepared device list.
-	// For DRA, we need to return at least one "Device" object that maps back to the requests.
-	// The CDIDeviceIDs will be used by the container runtime to find the right JSON file.
-	// We use the claim UID as the device name within the CDI spec.
-	cdiDeviceID := fmt.Sprintf("%s/%s=%s", cdiVendor, cdiClaimClass, string(claim.UID))
-
+	sliceName := string(claim.UID)
 	preparedDevices := PreparedDevices{
 		{
-			DeviceName:   string(claim.UID),
-			PoolName:     poolID,
-			Requests:     requests,
-			CDIDeviceIDs: []string{cdiDeviceID},
+			KVCachePoolName: poolID,
+			SliceName:       sliceName,
+			DeviceName:      sliceName,
+			PoolName:        DRAKVCachePoolName(claim.Namespace, poolID),
+			Requests:        requests,
 		},
+	}
+
+	// Populate CDI device IDs after the spec file name is known.
+	for _, slice := range preparedDevices {
+		slice.CDIDeviceIDs = []string{s.cdi.GetClaimDevice(string(claim.UID), slice)}
 	}
 
 	return preparedDevices, nil

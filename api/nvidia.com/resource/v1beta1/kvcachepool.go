@@ -32,23 +32,27 @@ const (
 )
 
 // +genclient
+// +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +k8s:openapi-gen=true
-// +kubebuilder:resource:scope=Namespaced
+// +kubebuilder:resource:scope=Cluster
 // +kubebuilder:subresource:status
 
 // KVCachePool represents a logical pool of KV cache capacity that can be shared
-// across inference workloads. Workloads with compatible KV formats may share KV
-// blocks directly. The KVCachePool controller
-// reconciles this API object and coordinates capacity allocation. Actual KV
-// storage and transfer are provided either by the project's default compatible
-// data plane or by an explicitly configured external data-plane provider such as
-// LMCache or Dynamo. Workloads claim slices of pool capacity via standard K8s
-// ResourceClaims.
+// across inference pods with compatible configurations (engine, model family,
+// dtype, block size). The KVCachePool controller reconciles this object:
+// it either discovers an existing pool that matches a ResourceClaim's parameters
+// or provisions a new one. Once ready, the controller writes the authoritative
+// data-plane address to Status.Endpoint; the kubelet plugin reads that field at
+// claim-prepare time and injects it into the pod as KVCACHE_ENDPOINT.
 //
-// NOTE: Future plans allow workloads with incompatible KV formats may allocate
-// separate, isolated slices from the same pool. This would involve creating 
-// a custom dataplane that does this.
+// v0 data plane: LMCache (DRAM, TCP). The controller provisions and manages a
+// LMCache Service; no user-supplied data-plane config is accepted.
+//
+// v1.1+ (HBM): provisioning registers per-node GPU handles with a NIXL index
+// service rather than creating an LMCache Service. A separate KVCacheHBMSpec
+// field (not yet defined) will carry the index-service endpoint and NIXL
+// transport parameters, and will be designed alongside v1.1.
 type KVCachePool struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -71,13 +75,20 @@ type KVCachePoolList struct {
 }
 
 // KVCachePoolSpec provides the spec for a KVCachePool.
+//
+// v0 match keys: Engine + ModelFamily + Dtype + BlockSizeTokens + LatencyTier.
+// Two ResourceClaims with identical values for all five fields will be matched
+// to the same pool by the controller.
 type KVCachePoolSpec struct {
 	// CapacityBytes is the total capacity of the KV cache pool in bytes.
 	// +kubebuilder:validation:Minimum=1
 	CapacityBytes int64 `json:"capacityBytes"`
 
-	// LatencyTier describes the memory/storage tier backing the pool. TODO: HBM's direct GPU memory.
-	// +kubebuilder:validation:Enum=HBM;DRAM;Disk
+	// LatencyTier describes the memory/storage tier backing the pool.
+	// v0 supports DRAM only (LMCache). HBM support is planned for v1.1 via
+	// NIXL/RDMA peer-to-peer GPU transfers; a separate KVCacheHBMSpec field
+	// will be introduced at that point.
+	// +kubebuilder:validation:Enum=HBM;DRAM
 	// +kubebuilder:default=DRAM
 	LatencyTier string `json:"latencyTier,omitempty"`
 
@@ -96,53 +107,6 @@ type KVCachePoolSpec struct {
 	// BlockSizeTokens is the number of tokens per KV block (e.g. 16 for vLLM default).
 	// +kubebuilder:validation:Minimum=1
 	BlockSizeTokens int32 `json:"blockSizeTokens"`
-
-	// PodSelector selects inference pods that may use this KV cache pool.
-	// +optional
-	PodSelector map[string]string `json:"podSelector,omitempty"`
-
-	// NodeSelector selects nodes where this pool is available.
-	// +optional
-	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
-
-	// DataPlane specifies an optional external data-plane provider and transport
-	// configuration for this pool. If omitted, the KVCachePool controller uses a
-	// default compatible dataplane for coordinating access to the shared pool. If
-	// specified, the controller integrates with this provider instead to coordinate
-	// access.
-	// +optional
-	DataPlane *KVCacheDataPlaneSpec `json:"dataPlane,omitempty"`
-}
-
-// KVCacheDataPlaneSpec describes the data-plane provider backing the pool.
-type KVCacheDataPlaneSpec struct {
-	// Provider is the higher-level KV cache implementation that the controller
-	// integrates with.
-	// Examples: "lmcache", "dynamo".
-	// +kubebuilder:validation:Enum=lmcache;dynamo
-	Provider string `json:"provider"`
-
-	// Endpoint is the network address of the provider.
-	// Injected into claiming pods as an environment variable at bind time.
-	// +optional
-	Endpoint string `json:"endpoint,omitempty"`
-
-	// Transport describes the lower-level data movement mechanism used by the provider.
-	// +optional
-	Transport *KVCacheTransportSpec `json:"transport,omitempty"`
-}
-
-// KVCacheTransportSpec describes how KV bytes move between processes/nodes.
-type KVCacheTransportSpec struct {
-	// Type is the transport mechanism.
-	// Examples: "tcp", "rdma", "ucx", "nixl".
-	// +kubebuilder:validation:Enum=tcp;rdma;ucx;nixl
-	Type string `json:"type"`
-
-	// Endpoint is the transport-specific endpoint, if different from the provider endpoint.
-	// Most v0 implementations should omit this and use the provider endpoint.
-	// +optional
-	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // KVCachePoolStatus provides the status for a KVCachePool.
@@ -151,21 +115,14 @@ type KVCachePoolStatus struct {
 	// +kubebuilder:default=NotReady
 	Status string `json:"status"`
 
+	// Endpoint is the authoritative network address of the data-plane service
+	// backing this pool, written by the controller after the pool is provisioned
+	// or discovered. The kubelet plugin reads this field at claim-prepare time
+	// and injects it into pods as KVCACHE_ENDPOINT.
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+
 	// AllocatedBytes tracks how many bytes of pool capacity have been
 	// allocated to active claims.
 	AllocatedBytes int64 `json:"allocatedBytes,omitempty"`
-
-	// +listType=map
-	// +listMapKey=name
-	Nodes []*KVCachePoolNode `json:"nodes,omitempty"`
-}
-
-// KVCachePoolNode provides information about each node participating in a KVCachePool.
-type KVCachePoolNode struct {
-	Name      string `json:"name"`
-	IPAddress string `json:"ipAddress,omitempty"`
-	// +optional
-	// +kubebuilder:validation:Enum=Ready;NotReady
-	// +kubebuilder:default=NotReady
-	Status string `json:"status,omitempty"`
 }
