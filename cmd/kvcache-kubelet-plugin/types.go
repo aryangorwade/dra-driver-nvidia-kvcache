@@ -23,11 +23,6 @@ import (
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 )
 
-const (
-	KVCacheSliceType = 	"kvcache-slice"
-	UnknownDeviceType = "unknown"
-)
-
 type PreparedDevices []*PreparedKVCacheSlice
 
 type PreparedKVCacheSlice struct {
@@ -42,9 +37,9 @@ type PreparedKVCacheSlice struct {
 
 	// These are the fields for device, the kubelet-facing prepared resource.
 	// Storing these instead of a kubeletplugin.Device results in cleaner checkpointing.
-	Requests     []string `json:"requests,omitempty"`
+	Requests []string `json:"requests,omitempty"`
 	// PoolName is the DRA pool name from the allocation result.
-	PoolName string `json:"poolName"`
+	PoolName     string   `json:"poolName"`
 	DeviceName   string   `json:"deviceName"`
 	CDIDeviceIDs []string `json:"cdiDeviceIDs,omitempty"`
 }

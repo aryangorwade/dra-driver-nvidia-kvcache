@@ -32,8 +32,6 @@ import (
 
 	"sigs.k8s.io/dra-driver-nvidia-gpu/pkg/flock"
 	drametrics "sigs.k8s.io/dra-driver-nvidia-gpu/pkg/metrics"
-
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (

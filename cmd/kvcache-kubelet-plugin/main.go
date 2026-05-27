@@ -30,6 +30,11 @@ import (
 	"k8s.io/component-base/logs"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
+
+	"sigs.k8s.io/dra-driver-nvidia-gpu/internal/common"
+	"sigs.k8s.io/dra-driver-nvidia-gpu/internal/info"
+	pkgflags "sigs.k8s.io/dra-driver-nvidia-gpu/pkg/flags"
+	"sigs.k8s.io/dra-driver-nvidia-gpu/pkg/metrics"
 )
 
 const (
@@ -69,7 +74,6 @@ func main() {
 
 func newApp() *cli.App {
 	loggingConfig := pkgflags.NewLoggingConfig()
-	featureGateConfig := pkgflags.NewFeatureGateConfig()
 	flags := &Flags{}
 
 	cliFlags := []cli.Flag{
@@ -130,7 +134,6 @@ func newApp() *cli.App {
 		},
 	}
 	cliFlags = append(cliFlags, flags.kubeClientConfig.Flags()...)
-	cliFlags = append(cliFlags, featureGateConfig.Flags()...)
 	cliFlags = append(cliFlags, loggingConfig.Flags()...)
 
 	app := &cli.App{
@@ -150,15 +153,9 @@ func newApp() *cli.App {
 			// later runtime inspection (it's otherwise not accessible anymore
 			// because we do not expose the raw `cliFlags`.
 			flags.klogVerbosity = int(loggingConfig.Config.Verbosity)
-			pkgflags.LogStartupConfig(flags, loggingConfig)
 			return err
 		},
 		Action: func(c *cli.Context) error {
-			// Validate feature gate dependencies
-			if err := featuregates.ValidateFeatureGates(); err != nil {
-				return fmt.Errorf("feature gate validation failed: %w", err)
-			}
-
 			clientSets, err := flags.kubeClientConfig.NewClientSets()
 			if err != nil {
 				return fmt.Errorf("create client: %w", err)
