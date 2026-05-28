@@ -19,7 +19,7 @@ limitations under the License.
 package externalversions
 
 import (
-	"fmt"
+	fmt "fmt"
 
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
@@ -57,6 +57,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Resource().V1beta1().ComputeDomains().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("computedomaincliques"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Resource().V1beta1().ComputeDomainCliques().Informer()}, nil
+	case v1beta1.SchemeGroupVersion.WithResource("kvcachepools"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Resource().V1beta1().KVCachePools().Informer()}, nil
 
 	}
 

@@ -33,38 +33,37 @@ import (
 	resourcev1beta1 "sigs.k8s.io/dra-driver-nvidia-gpu/pkg/nvidia.com/listers/resource/v1beta1"
 )
 
-// ComputeDomainCliqueInformer provides access to a shared informer and lister for
-// ComputeDomainCliques.
-type ComputeDomainCliqueInformer interface {
+// KVCachePoolInformer provides access to a shared informer and lister for
+// KVCachePools.
+type KVCachePoolInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() resourcev1beta1.ComputeDomainCliqueLister
+	Lister() resourcev1beta1.KVCachePoolLister
 }
 
-type computeDomainCliqueInformer struct {
+type kVCachePoolInformer struct {
 	factory          internalinterfaces.SharedInformerFactory
 	tweakListOptions internalinterfaces.TweakListOptionsFunc
-	namespace        string
 }
 
-// NewComputeDomainCliqueInformer constructs a new informer for ComputeDomainClique type.
+// NewKVCachePoolInformer constructs a new informer for KVCachePool type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewComputeDomainCliqueInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
-	return NewComputeDomainCliqueInformerWithOptions(client, namespace, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: indexers})
+func NewKVCachePoolInformer(client versioned.Interface, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
+	return NewKVCachePoolInformerWithOptions(client, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: indexers})
 }
 
-// NewFilteredComputeDomainCliqueInformer constructs a new informer for ComputeDomainClique type.
+// NewFilteredKVCachePoolInformer constructs a new informer for KVCachePool type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewFilteredComputeDomainCliqueInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
-	return NewComputeDomainCliqueInformerWithOptions(client, namespace, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: indexers, TweakListOptions: tweakListOptions})
+func NewFilteredKVCachePoolInformer(client versioned.Interface, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
+	return NewKVCachePoolInformerWithOptions(client, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: indexers, TweakListOptions: tweakListOptions})
 }
 
-// NewComputeDomainCliqueInformerWithOptions constructs a new informer for ComputeDomainClique type with additional options.
+// NewKVCachePoolInformerWithOptions constructs a new informer for KVCachePool type with additional options.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewComputeDomainCliqueInformerWithOptions(client versioned.Interface, namespace string, options internalinterfaces.InformerOptions) cache.SharedIndexInformer {
-	gvr := schema.GroupVersionResource{Group: "resource.nvidia.com", Version: "v1beta1", Resource: "computedomaincliques"}
+func NewKVCachePoolInformerWithOptions(client versioned.Interface, options internalinterfaces.InformerOptions) cache.SharedIndexInformer {
+	gvr := schema.GroupVersionResource{Group: "resource.nvidia.com", Version: "v1beta1", Resource: "kvcachepools"}
 	identifier := options.InformerName.WithResource(gvr)
 	tweakListOptions := options.TweakListOptions
 	return cache.NewSharedIndexInformerWithOptions(
@@ -73,28 +72,28 @@ func NewComputeDomainCliqueInformerWithOptions(client versioned.Interface, names
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.ResourceV1beta1().ComputeDomainCliques(namespace).List(context.Background(), opts)
+				return client.ResourceV1beta1().KVCachePools().List(context.Background(), opts)
 			},
 			WatchFunc: func(opts v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.ResourceV1beta1().ComputeDomainCliques(namespace).Watch(context.Background(), opts)
+				return client.ResourceV1beta1().KVCachePools().Watch(context.Background(), opts)
 			},
 			ListWithContextFunc: func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.ResourceV1beta1().ComputeDomainCliques(namespace).List(ctx, opts)
+				return client.ResourceV1beta1().KVCachePools().List(ctx, opts)
 			},
 			WatchFuncWithContext: func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.ResourceV1beta1().ComputeDomainCliques(namespace).Watch(ctx, opts)
+				return client.ResourceV1beta1().KVCachePools().Watch(ctx, opts)
 			},
 		}, client),
-		&nvidiacomresourcev1beta1.ComputeDomainClique{},
+		&nvidiacomresourcev1beta1.KVCachePool{},
 		cache.SharedIndexInformerOptions{
 			ResyncPeriod: options.ResyncPeriod,
 			Indexers:     options.Indexers,
@@ -103,14 +102,14 @@ func NewComputeDomainCliqueInformerWithOptions(client versioned.Interface, names
 	)
 }
 
-func (f *computeDomainCliqueInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-	return NewComputeDomainCliqueInformerWithOptions(client, f.namespace, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, InformerName: f.factory.InformerName(), TweakListOptions: f.tweakListOptions})
+func (f *kVCachePoolInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
+	return NewKVCachePoolInformerWithOptions(client, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, InformerName: f.factory.InformerName(), TweakListOptions: f.tweakListOptions})
 }
 
-func (f *computeDomainCliqueInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&nvidiacomresourcev1beta1.ComputeDomainClique{}, f.defaultInformer)
+func (f *kVCachePoolInformer) Informer() cache.SharedIndexInformer {
+	return f.factory.InformerFor(&nvidiacomresourcev1beta1.KVCachePool{}, f.defaultInformer)
 }
 
-func (f *computeDomainCliqueInformer) Lister() resourcev1beta1.ComputeDomainCliqueLister {
-	return resourcev1beta1.NewComputeDomainCliqueLister(f.Informer().GetIndexer())
+func (f *kVCachePoolInformer) Lister() resourcev1beta1.KVCachePoolLister {
+	return resourcev1beta1.NewKVCachePoolLister(f.Informer().GetIndexer())
 }

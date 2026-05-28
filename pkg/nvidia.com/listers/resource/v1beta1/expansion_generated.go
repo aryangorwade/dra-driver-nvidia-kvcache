@@ -33,3 +33,7 @@ type ComputeDomainCliqueListerExpansion interface{}
 // ComputeDomainCliqueNamespaceListerExpansion allows custom methods to be added to
 // ComputeDomainCliqueNamespaceLister.
 type ComputeDomainCliqueNamespaceListerExpansion interface{}
+
+// KVCachePoolListerExpansion allows custom methods to be added to
+// KVCachePoolLister.
+type KVCachePoolListerExpansion interface{}

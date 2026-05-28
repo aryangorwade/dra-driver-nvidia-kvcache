@@ -28,6 +28,8 @@ type Interface interface {
 	ComputeDomains() ComputeDomainInformer
 	// ComputeDomainCliques returns a ComputeDomainCliqueInformer.
 	ComputeDomainCliques() ComputeDomainCliqueInformer
+	// KVCachePools returns a KVCachePoolInformer.
+	KVCachePools() KVCachePoolInformer
 }
 
 type version struct {
@@ -49,4 +51,9 @@ func (v *version) ComputeDomains() ComputeDomainInformer {
 // ComputeDomainCliques returns a ComputeDomainCliqueInformer.
 func (v *version) ComputeDomainCliques() ComputeDomainCliqueInformer {
 	return &computeDomainCliqueInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// KVCachePools returns a KVCachePoolInformer.
+func (v *version) KVCachePools() KVCachePoolInformer {
+	return &kVCachePoolInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }

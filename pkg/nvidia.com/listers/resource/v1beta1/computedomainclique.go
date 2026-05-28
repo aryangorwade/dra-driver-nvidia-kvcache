@@ -19,10 +19,10 @@ limitations under the License.
 package v1beta1
 
 import (
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/cache"
-	v1beta1 "sigs.k8s.io/dra-driver-nvidia-gpu/api/nvidia.com/resource/v1beta1"
+	labels "k8s.io/apimachinery/pkg/labels"
+	listers "k8s.io/client-go/listers"
+	cache "k8s.io/client-go/tools/cache"
+	resourcev1beta1 "sigs.k8s.io/dra-driver-nvidia-gpu/api/nvidia.com/resource/v1beta1"
 )
 
 // ComputeDomainCliqueLister helps list ComputeDomainCliques.
@@ -30,7 +30,7 @@ import (
 type ComputeDomainCliqueLister interface {
 	// List lists all ComputeDomainCliques in the indexer.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*v1beta1.ComputeDomainClique, err error)
+	List(selector labels.Selector) (ret []*resourcev1beta1.ComputeDomainClique, err error)
 	// ComputeDomainCliques returns an object that can list and get ComputeDomainCliques.
 	ComputeDomainCliques(namespace string) ComputeDomainCliqueNamespaceLister
 	ComputeDomainCliqueListerExpansion
@@ -38,25 +38,17 @@ type ComputeDomainCliqueLister interface {
 
 // computeDomainCliqueLister implements the ComputeDomainCliqueLister interface.
 type computeDomainCliqueLister struct {
-	indexer cache.Indexer
+	listers.ResourceIndexer[*resourcev1beta1.ComputeDomainClique]
 }
 
 // NewComputeDomainCliqueLister returns a new ComputeDomainCliqueLister.
 func NewComputeDomainCliqueLister(indexer cache.Indexer) ComputeDomainCliqueLister {
-	return &computeDomainCliqueLister{indexer: indexer}
-}
-
-// List lists all ComputeDomainCliques in the indexer.
-func (s *computeDomainCliqueLister) List(selector labels.Selector) (ret []*v1beta1.ComputeDomainClique, err error) {
-	err = cache.ListAll(s.indexer, selector, func(m interface{}) {
-		ret = append(ret, m.(*v1beta1.ComputeDomainClique))
-	})
-	return ret, err
+	return &computeDomainCliqueLister{listers.New[*resourcev1beta1.ComputeDomainClique](indexer, resourcev1beta1.Resource("computedomainclique"))}
 }
 
 // ComputeDomainCliques returns an object that can list and get ComputeDomainCliques.
 func (s *computeDomainCliqueLister) ComputeDomainCliques(namespace string) ComputeDomainCliqueNamespaceLister {
-	return computeDomainCliqueNamespaceLister{indexer: s.indexer, namespace: namespace}
+	return computeDomainCliqueNamespaceLister{listers.NewNamespaced[*resourcev1beta1.ComputeDomainClique](s.ResourceIndexer, namespace)}
 }
 
 // ComputeDomainCliqueNamespaceLister helps list and get ComputeDomainCliques.
@@ -64,36 +56,15 @@ func (s *computeDomainCliqueLister) ComputeDomainCliques(namespace string) Compu
 type ComputeDomainCliqueNamespaceLister interface {
 	// List lists all ComputeDomainCliques in the indexer for a given namespace.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*v1beta1.ComputeDomainClique, err error)
+	List(selector labels.Selector) (ret []*resourcev1beta1.ComputeDomainClique, err error)
 	// Get retrieves the ComputeDomainClique from the indexer for a given namespace and name.
 	// Objects returned here must be treated as read-only.
-	Get(name string) (*v1beta1.ComputeDomainClique, error)
+	Get(name string) (*resourcev1beta1.ComputeDomainClique, error)
 	ComputeDomainCliqueNamespaceListerExpansion
 }
 
 // computeDomainCliqueNamespaceLister implements the ComputeDomainCliqueNamespaceLister
 // interface.
 type computeDomainCliqueNamespaceLister struct {
-	indexer   cache.Indexer
-	namespace string
-}
-
-// List lists all ComputeDomainCliques in the indexer for a given namespace.
-func (s computeDomainCliqueNamespaceLister) List(selector labels.Selector) (ret []*v1beta1.ComputeDomainClique, err error) {
-	err = cache.ListAllByNamespace(s.indexer, s.namespace, selector, func(m interface{}) {
-		ret = append(ret, m.(*v1beta1.ComputeDomainClique))
-	})
-	return ret, err
-}
-
-// Get retrieves the ComputeDomainClique from the indexer for a given namespace and name.
-func (s computeDomainCliqueNamespaceLister) Get(name string) (*v1beta1.ComputeDomainClique, error) {
-	obj, exists, err := s.indexer.GetByKey(s.namespace + "/" + name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(v1beta1.Resource("computedomainclique"), name)
-	}
-	return obj.(*v1beta1.ComputeDomainClique), nil
+	listers.ResourceIndexer[*resourcev1beta1.ComputeDomainClique]
 }

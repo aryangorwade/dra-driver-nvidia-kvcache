@@ -24,26 +24,24 @@ import (
 	resourcev1beta1 "sigs.k8s.io/dra-driver-nvidia-gpu/pkg/nvidia.com/clientset/versioned/typed/resource/v1beta1"
 )
 
-// fakeComputeDomains implements ComputeDomainInterface
-type fakeComputeDomains struct {
-	*gentype.FakeClientWithList[*v1beta1.ComputeDomain, *v1beta1.ComputeDomainList]
+// fakeKVCachePools implements KVCachePoolInterface
+type fakeKVCachePools struct {
+	*gentype.FakeClientWithList[*v1beta1.KVCachePool, *v1beta1.KVCachePoolList]
 	Fake *FakeResourceV1beta1
 }
 
-func newFakeComputeDomains(fake *FakeResourceV1beta1, namespace string) resourcev1beta1.ComputeDomainInterface {
-	return &fakeComputeDomains{
-		gentype.NewFakeClientWithList[*v1beta1.ComputeDomain, *v1beta1.ComputeDomainList](
+func newFakeKVCachePools(fake *FakeResourceV1beta1) resourcev1beta1.KVCachePoolInterface {
+	return &fakeKVCachePools{
+		gentype.NewFakeClientWithList[*v1beta1.KVCachePool, *v1beta1.KVCachePoolList](
 			fake.Fake,
-			namespace,
-			v1beta1.SchemeGroupVersion.WithResource("computedomains"),
-			v1beta1.SchemeGroupVersion.WithKind("ComputeDomain"),
-			func() *v1beta1.ComputeDomain { return &v1beta1.ComputeDomain{} },
-			func() *v1beta1.ComputeDomainList { return &v1beta1.ComputeDomainList{} },
-			func(dst, src *v1beta1.ComputeDomainList) { dst.ListMeta = src.ListMeta },
-			func(list *v1beta1.ComputeDomainList) []*v1beta1.ComputeDomain {
-				return gentype.ToPointerSlice(list.Items)
-			},
-			func(list *v1beta1.ComputeDomainList, items []*v1beta1.ComputeDomain) {
+			"",
+			v1beta1.SchemeGroupVersion.WithResource("kvcachepools"),
+			v1beta1.SchemeGroupVersion.WithKind("KVCachePool"),
+			func() *v1beta1.KVCachePool { return &v1beta1.KVCachePool{} },
+			func() *v1beta1.KVCachePoolList { return &v1beta1.KVCachePoolList{} },
+			func(dst, src *v1beta1.KVCachePoolList) { dst.ListMeta = src.ListMeta },
+			func(list *v1beta1.KVCachePoolList) []*v1beta1.KVCachePool { return gentype.ToPointerSlice(list.Items) },
+			func(list *v1beta1.KVCachePoolList, items []*v1beta1.KVCachePool) {
 				list.Items = gentype.FromPointerSlice(items)
 			},
 		),

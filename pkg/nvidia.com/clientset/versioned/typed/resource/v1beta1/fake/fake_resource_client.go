@@ -29,11 +29,15 @@ type FakeResourceV1beta1 struct {
 }
 
 func (c *FakeResourceV1beta1) ComputeDomains(namespace string) v1beta1.ComputeDomainInterface {
-	return &FakeComputeDomains{c, namespace}
+	return newFakeComputeDomains(c, namespace)
 }
 
 func (c *FakeResourceV1beta1) ComputeDomainCliques(namespace string) v1beta1.ComputeDomainCliqueInterface {
-	return &FakeComputeDomainCliques{c, namespace}
+	return newFakeComputeDomainCliques(c, namespace)
+}
+
+func (c *FakeResourceV1beta1) KVCachePools() v1beta1.KVCachePoolInterface {
+	return newFakeKVCachePools(c)
 }
 
 // RESTClient returns a RESTClient that is used to communicate

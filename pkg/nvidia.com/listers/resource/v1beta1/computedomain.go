@@ -19,10 +19,10 @@ limitations under the License.
 package v1beta1
 
 import (
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/cache"
-	v1beta1 "sigs.k8s.io/dra-driver-nvidia-gpu/api/nvidia.com/resource/v1beta1"
+	labels "k8s.io/apimachinery/pkg/labels"
+	listers "k8s.io/client-go/listers"
+	cache "k8s.io/client-go/tools/cache"
+	resourcev1beta1 "sigs.k8s.io/dra-driver-nvidia-gpu/api/nvidia.com/resource/v1beta1"
 )
 
 // ComputeDomainLister helps list ComputeDomains.
@@ -30,7 +30,7 @@ import (
 type ComputeDomainLister interface {
 	// List lists all ComputeDomains in the indexer.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*v1beta1.ComputeDomain, err error)
+	List(selector labels.Selector) (ret []*resourcev1beta1.ComputeDomain, err error)
 	// ComputeDomains returns an object that can list and get ComputeDomains.
 	ComputeDomains(namespace string) ComputeDomainNamespaceLister
 	ComputeDomainListerExpansion
@@ -38,25 +38,17 @@ type ComputeDomainLister interface {
 
 // computeDomainLister implements the ComputeDomainLister interface.
 type computeDomainLister struct {
-	indexer cache.Indexer
+	listers.ResourceIndexer[*resourcev1beta1.ComputeDomain]
 }
 
 // NewComputeDomainLister returns a new ComputeDomainLister.
 func NewComputeDomainLister(indexer cache.Indexer) ComputeDomainLister {
-	return &computeDomainLister{indexer: indexer}
-}
-
-// List lists all ComputeDomains in the indexer.
-func (s *computeDomainLister) List(selector labels.Selector) (ret []*v1beta1.ComputeDomain, err error) {
-	err = cache.ListAll(s.indexer, selector, func(m interface{}) {
-		ret = append(ret, m.(*v1beta1.ComputeDomain))
-	})
-	return ret, err
+	return &computeDomainLister{listers.New[*resourcev1beta1.ComputeDomain](indexer, resourcev1beta1.Resource("computedomain"))}
 }
 
 // ComputeDomains returns an object that can list and get ComputeDomains.
 func (s *computeDomainLister) ComputeDomains(namespace string) ComputeDomainNamespaceLister {
-	return computeDomainNamespaceLister{indexer: s.indexer, namespace: namespace}
+	return computeDomainNamespaceLister{listers.NewNamespaced[*resourcev1beta1.ComputeDomain](s.ResourceIndexer, namespace)}
 }
 
 // ComputeDomainNamespaceLister helps list and get ComputeDomains.
@@ -64,36 +56,15 @@ func (s *computeDomainLister) ComputeDomains(namespace string) ComputeDomainName
 type ComputeDomainNamespaceLister interface {
 	// List lists all ComputeDomains in the indexer for a given namespace.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*v1beta1.ComputeDomain, err error)
+	List(selector labels.Selector) (ret []*resourcev1beta1.ComputeDomain, err error)
 	// Get retrieves the ComputeDomain from the indexer for a given namespace and name.
 	// Objects returned here must be treated as read-only.
-	Get(name string) (*v1beta1.ComputeDomain, error)
+	Get(name string) (*resourcev1beta1.ComputeDomain, error)
 	ComputeDomainNamespaceListerExpansion
 }
 
 // computeDomainNamespaceLister implements the ComputeDomainNamespaceLister
 // interface.
 type computeDomainNamespaceLister struct {
-	indexer   cache.Indexer
-	namespace string
-}
-
-// List lists all ComputeDomains in the indexer for a given namespace.
-func (s computeDomainNamespaceLister) List(selector labels.Selector) (ret []*v1beta1.ComputeDomain, err error) {
-	err = cache.ListAllByNamespace(s.indexer, s.namespace, selector, func(m interface{}) {
-		ret = append(ret, m.(*v1beta1.ComputeDomain))
-	})
-	return ret, err
-}
-
-// Get retrieves the ComputeDomain from the indexer for a given namespace and name.
-func (s computeDomainNamespaceLister) Get(name string) (*v1beta1.ComputeDomain, error) {
-	obj, exists, err := s.indexer.GetByKey(s.namespace + "/" + name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(v1beta1.Resource("computedomain"), name)
-	}
-	return obj.(*v1beta1.ComputeDomain), nil
+	listers.ResourceIndexer[*resourcev1beta1.ComputeDomain]
 }
