@@ -22,10 +22,14 @@ import (
 	"sync"
 
 	resourceapi "k8s.io/api/resource/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
+
 	configapi "sigs.k8s.io/dra-driver-nvidia-gpu/api/nvidia.com/resource/v1beta1"
+	nvclientset "sigs.k8s.io/dra-driver-nvidia-gpu/pkg/nvidia.com/clientset/versioned"
 )
 
 type OpaqueDeviceConfig struct {
@@ -35,8 +39,9 @@ type OpaqueDeviceConfig struct {
 
 type DeviceState struct {
 	sync.Mutex
-	cdi                      *CDIHandler
-	config                   *Config
+	cdi      *CDIHandler
+	config   *Config
+	nvclient nvclientset.Interface
 }
 
 func NewDeviceState(ctx context.Context, config *Config) (*DeviceState, error) {
@@ -49,8 +54,9 @@ func NewDeviceState(ctx context.Context, config *Config) (*DeviceState, error) {
 	}
 
 	state := &DeviceState{
-		cdi:    cdi,
-		config: config,
+		cdi:      cdi,
+		config:   config,
+		nvclient: config.clientsets.Nvidia,
 	}
 
 	return state, nil
@@ -93,7 +99,6 @@ func (s *DeviceState) Unprepare(ctx context.Context, claimRef kubeletplugin.Name
 }
 
 func (s *DeviceState) prepareDevices(ctx context.Context, claim *resourceapi.ResourceClaim) (PreparedDevices, error) {
-	// Get all opaque configs intended for the driver
 	configs, err := GetOpaqueDeviceConfigs(
 		configapi.StrictDecoder,
 		DriverName,
@@ -103,40 +108,112 @@ func (s *DeviceState) prepareDevices(ctx context.Context, claim *resourceapi.Res
 		return nil, fmt.Errorf("error getting opaque device configs: %w", err)
 	}
 
-	// Find the specific KVCachePoolConfig and extract PoolName
-	var poolID string
+	var kvConfig *configapi.KVCachePoolConfig
 	var requests []string
 	for _, c := range configs {
-		if kvConfig, ok := c.Config.(*configapi.KVCachePoolConfig); ok {
-			poolID = kvConfig.PoolName
+		if cfg, ok := c.Config.(*configapi.KVCachePoolConfig); ok {
+			kvConfig = cfg
 			requests = c.Requests
 			break
 		}
 	}
-
-	if poolID == "" {
-		return nil, fmt.Errorf("no KVCachePoolConfig found in claim")
+	if kvConfig == nil {
+		return nil, permanentError{fmt.Errorf("no KVCachePoolConfig found in claim")}
 	}
 
-	klog.Infof("Preparing KV Cache for Pool: %s", poolID)
-
-	sliceName := string(claim.UID)
-	preparedDevices := PreparedDevices{
-		{
-			KVCachePoolName: poolID,
-			SliceName:       sliceName,
-			DeviceName:      sliceName,
-			PoolName:        DRAKVCachePoolName(claim.Namespace, poolID),
-			Requests:        requests,
-		},
+	pool, err := s.resolveKVCachePool(ctx, claim, kvConfig)
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePoolReady(pool); err != nil {
+		return nil, err
 	}
 
-	// Populate CDI device IDs after the spec file name is known.
+	transport := transportForTier(pool.Spec.LatencyTier)
+	endpoint := pool.Status.Endpoint
+
+	var preparedDevices PreparedDevices
+	for _, result := range claim.Status.Allocation.Devices.Results {
+		if result.Driver != DriverName {
+			continue
+		}
+
+		sliceName := fmt.Sprintf("%s-%s", claim.UID, result.Device)
+		preparedDevices = append(preparedDevices, &PreparedKVCacheSlice{
+			KVCachePoolName:  pool.Name,
+			SliceName:        sliceName,
+			KVCacheEndpoint:  endpoint,
+			KVCacheTransport: transport,
+			CapacityBytes:    kvConfig.CapacityBytes,
+			Requests:         requests,
+			PoolName:         result.Pool,
+			DeviceName:       result.Device,
+		})
+	}
+
+	if len(preparedDevices) == 0 {
+		return nil, fmt.Errorf("no allocation results for driver %s in claim %s", DriverName, ResourceClaimToString(claim))
+	}
+
 	for _, slice := range preparedDevices {
 		slice.CDIDeviceIDs = []string{s.cdi.GetClaimDevice(string(claim.UID), slice)}
 	}
 
+	klog.Infof("Prepared KV cache for pool %q endpoint %q (claim %s)", pool.Name, endpoint, ResourceClaimToString(claim))
 	return preparedDevices, nil
+}
+
+// resolveKVCachePool loads the KVCachePool chosen for this claim. Match-or-provision
+// is owned by the cluster controller (plans/v0.md); the kubelet plugin only reads
+// status.endpoint from the bound pool.
+func (s *DeviceState) resolveKVCachePool(ctx context.Context, claim *resourceapi.ResourceClaim, cfg *configapi.KVCachePoolConfig) (*configapi.KVCachePool, error) {
+	if err := cfg.Normalize(); err != nil {
+		return nil, permanentError{fmt.Errorf("normalize KVCachePoolConfig: %w", err)}
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, permanentError{fmt.Errorf("invalid KVCachePoolConfig: %w", err)}
+	}
+
+	poolName, err := cfg.ResolvedPoolName(claim.Annotations)
+	if err != nil {
+		return nil, err
+	}
+
+	pool, err := s.nvclient.ResourceV1beta1().KVCachePools().Get(ctx, poolName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			if cfg.PoolName != "" {
+				return nil, permanentError{fmt.Errorf("KVCachePool %q not found: %w", poolName, err)}
+			}
+			return nil, fmt.Errorf("KVCachePool %q not found (provision may be in progress): %w", poolName, err)
+		}
+		return nil, fmt.Errorf("get KVCachePool %q: %w", poolName, err)
+	}
+	return pool, nil
+}
+
+func validatePoolReady(pool *configapi.KVCachePool) error {
+	if pool.Status.Status != configapi.KVCachePoolStatusReady {
+		return fmt.Errorf("KVCachePool %q is not ready (status=%q)", pool.Name, pool.Status.Status)
+	}
+	if pool.Status.Endpoint == "" {
+		return fmt.Errorf("KVCachePool %q has no status.endpoint", pool.Name)
+	}
+	return nil
+}
+
+func transportForTier(tier string) string {
+	if tier == "" {
+		tier = configapi.KVCacheLatencyTierDRAM
+	}
+	switch tier {
+	case configapi.KVCacheLatencyTierDRAM:
+		return defaultKVCacheTransport
+	default:
+		// v0 only exercises DRAM/LMCache (tcp). Other tiers will get explicit
+		// transport values when HBM support lands.
+		return defaultKVCacheTransport
+	}
 }
 
 // GetOpaqueDeviceConfigs returns an ordered list of the configs contained in possibleConfigs for this driver.
@@ -155,7 +232,6 @@ func GetOpaqueDeviceConfigs(
 	driverName string,
 	possibleConfigs []resourceapi.DeviceAllocationConfiguration,
 ) ([]*OpaqueDeviceConfig, error) {
-	// Collect all configs in order of reverse precedence.
 	var classConfigs []resourceapi.DeviceAllocationConfiguration
 	var claimConfigs []resourceapi.DeviceAllocationConfiguration
 	var candidateConfigs []resourceapi.DeviceAllocationConfiguration
@@ -172,38 +248,24 @@ func GetOpaqueDeviceConfigs(
 	candidateConfigs = append(candidateConfigs, classConfigs...)
 	candidateConfigs = append(candidateConfigs, claimConfigs...)
 
-	// Decode all configs that are relevant for the driver.
 	var resultConfigs []*OpaqueDeviceConfig
 	for _, config := range candidateConfigs {
-		// If this is nil, the driver doesn't support some future API extension
-		// and needs to be updated.
 		if config.Opaque == nil {
 			return nil, fmt.Errorf("only opaque parameters are supported by this driver")
 		}
-
-		// Configs for different drivers may have been specified because a
-		// single request can be satisfied by different drivers. This is not
-		// an error -- drivers must skip over other driver's configs in order
-		// to support this.
 		if config.Opaque.Driver != driverName {
 			continue
 		}
 
 		decodedConfig, err := runtime.Decode(decoder, config.Opaque.Parameters.Raw)
 		if err != nil {
-			// Bad opaque config: i) do not retry preparing this resource
-			// internally and ii) return notion of permanent error to kubelet,
-			// to give it an opportunity to play this error back to the user so
-			// that it becomes actionable.
 			return nil, permanentError{fmt.Errorf("error decoding config parameters: %w", err)}
 		}
 
-		resultConfig := &OpaqueDeviceConfig{
+		resultConfigs = append(resultConfigs, &OpaqueDeviceConfig{
 			Requests: config.Requests,
 			Config:   decodedConfig,
-		}
-
-		resultConfigs = append(resultConfigs, resultConfig)
+		})
 	}
 
 	return resultConfigs, nil

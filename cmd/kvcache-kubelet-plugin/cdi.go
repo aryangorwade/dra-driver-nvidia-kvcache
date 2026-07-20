@@ -30,8 +30,23 @@ const (
 	cdiClaimClass = "claim"
 	cdiClaimKind  = cdiVendor + "/" + cdiClaimClass
 
-	defaultCDIRoot = "/var/run/cdi"
+	defaultCDIRoot          = "/var/run/cdi"
+	defaultKVCacheTransport = "tcp"
 )
+
+// cdiEnvForSlice returns the env vars injected into the workload container.
+func cdiEnvForSlice(slice *PreparedKVCacheSlice) []string {
+	transport := slice.KVCacheTransport
+	if transport == "" {
+		transport = defaultKVCacheTransport
+	}
+	return []string{
+		fmt.Sprintf("KVCACHE_POOL_ID=%s", slice.KVCachePoolName),
+		fmt.Sprintf("KVCACHE_SLICE_NAME=%s", slice.SliceName),
+		fmt.Sprintf("KVCACHE_ENDPOINT=%s", slice.KVCacheEndpoint),
+		fmt.Sprintf("KVCACHE_TRANSPORT=%s", transport),
+	}
+}
 
 // CDIHandler writes and removes per-claim CDI spec files that inject
 // KV cache pool configuration as environment variables into containers.
@@ -80,10 +95,7 @@ func (cdi *CDIHandler) CreateClaimSpecFile(claimUID string, devices PreparedDevi
 		deviceSpecs = append(deviceSpecs, cdispec.Device{
 			Name: fmt.Sprintf("%s-%s", claimUID, slice.SliceName),
 			ContainerEdits: cdispec.ContainerEdits{
-				Env: []string{
-					fmt.Sprintf("KVCACHE_POOL_ID=%s", slice.KVCachePoolName),
-					fmt.Sprintf("KVCACHE_SLICE_NAME=%s", slice.SliceName),
-				},
+				Env: cdiEnvForSlice(slice),
 			},
 		})
 	}

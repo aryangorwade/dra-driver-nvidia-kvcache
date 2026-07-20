@@ -32,6 +32,12 @@ type PreparedKVCacheSlice struct {
 	// SliceName uniquely identifies this claim's slice within the pool.
 	SliceName string `json:"sliceName"`
 
+	// KVCacheEndpoint is the data-plane address from KVCachePool.status.endpoint.
+	KVCacheEndpoint string `json:"kvCacheEndpoint,omitempty"`
+
+	// KVCacheTransport is the transport mechanism (v0 DRAM uses "tcp").
+	KVCacheTransport string `json:"kvCacheTransport,omitempty"`
+
 	// CapacityBytes is the amount of KV cache capacity allocated to this slice.
 	CapacityBytes int64 `json:"capacityBytes,omitempty"`
 

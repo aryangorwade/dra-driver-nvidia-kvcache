@@ -25,6 +25,10 @@ const (
 	KVCacheEngineVLLM   = "vllm"
 	KVCacheEngineTRTLLM = "trtllm"
 	KVCacheEngineSGLang = "sglang"
+
+	// KVCachePoolClaimAnnotationKey is set on a ResourceClaim by the kvcache
+	// controller after match-or-provision selects or creates a KVCachePool.
+	KVCachePoolClaimAnnotationKey = "kvcache.nvidia.com/kvcache-pool-name"
 )
 
 // KVCachePoolConfig holds the ResourceClaim parameters used to select or create
@@ -108,4 +112,22 @@ func (c *KVCachePoolConfig) Validate() error {
 		return fmt.Errorf("blockSizeTokens must be at least 1")
 	}
 	return nil
+}
+
+// ResolvedPoolName returns the KVCachePool name for this claim. The controller
+// writes KVCachePoolClaimAnnotationKey after match-or-provision; PoolName in
+// the config is an optional override that skips discovery.
+func (c *KVCachePoolConfig) ResolvedPoolName(annotations map[string]string) (string, error) {
+	if c.PoolName != "" {
+		return c.PoolName, nil
+	}
+	if annotations != nil {
+		if name := annotations[KVCachePoolClaimAnnotationKey]; name != "" {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"no KVCachePool bound to claim: set poolName in KVCachePoolConfig or wait for controller annotation %q",
+		KVCachePoolClaimAnnotationKey,
+	)
 }
