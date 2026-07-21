@@ -52,6 +52,7 @@ type Flags struct {
 	cdiRoot                       string
 	kubeletRegistrarDirectoryPath string
 	kubeletPluginsDirectoryPath   string
+	slotsPerNode                  int
 	healthcheckPort               int
 	klogVerbosity                 int
 }
@@ -126,6 +127,13 @@ func newApp() *cli.App {
 			EnvVars:     []string{"KUBELET_PLUGINS_DIRECTORY_PATH"},
 		},
 		&cli.IntFlag{
+			Name:        "slots-per-node",
+			Usage:       "Number of virtual KV-cache DRA slots to publish per node. Slots are scheduling handles, not KV-cache capacity.",
+			Value:       defaultKVCacheSlotsPerNode,
+			Destination: &flags.slotsPerNode,
+			EnvVars:     []string{"KVCACHE_SLOTS_PER_NODE"},
+		},
+		&cli.IntFlag{
 			Name:        "healthcheck-port",
 			Usage:       "Port to start a gRPC healthcheck service. When positive, a literal port number. When zero, a random port is allocated. When negative, the healthcheck service is disabled.",
 			Value:       -1,
@@ -145,6 +153,9 @@ func newApp() *cli.App {
 		Before: func(c *cli.Context) error {
 			if c.Args().Len() > 0 {
 				return fmt.Errorf("arguments not supported: %v", c.Args().Slice())
+			}
+			if flags.slotsPerNode < 1 {
+				return fmt.Errorf("slots-per-node must be at least 1")
 			}
 			// `loggingConfig` must be applied before doing any logging
 			err := loggingConfig.Apply()
@@ -243,6 +254,3 @@ func RunPlugin(ctx context.Context, config *Config) error {
 
 	return nil
 }
-
-
-

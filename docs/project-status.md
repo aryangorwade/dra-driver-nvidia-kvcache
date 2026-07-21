@@ -63,7 +63,8 @@ LLM container
 - **`status.endpoint`**: the authoritative LMCache service address, written by
   the controller.
 - **DRA `ResourceSlice` device**: a virtual node-local scheduling slot. It is
-  distinct from the logical cluster-wide `KVCachePool`.
+  distinct from the logical cluster-wide `KVCachePool`; multiple slots on a
+  node can bind to the same shared pool.
 
 ## Work completed
 
@@ -83,6 +84,9 @@ LLM container
   and TCP transport.
 - The plugin reads `KVCachePool.status.endpoint` and requires the pool to be
   `Ready`.
+- Publishes configurable virtual `kvcache-slot-N` DRA devices on each node
+  (default: 16) so multiple local claims can be scheduled. Slots are not
+  KV-cache capacity partitions.
 
 ### Match-or-provision ownership
 
@@ -119,11 +123,6 @@ This maintains the intended v0 separation of responsibilities:
 
 Until it exists, automatic match-or-provision is unavailable. Demonstrations
 must use an explicit `poolName` referring to a pre-created Ready pool.
-
-### DRA resource publication (critical)
-
-The kubelet plugin must publish `ResourceSlice` data, including a virtual
-`kvcache-slot` device, so the scheduler can allocate claims to this driver.
 
 ### Deployment and integration
 

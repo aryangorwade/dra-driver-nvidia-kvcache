@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/runtime"
 	coreclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
+	"k8s.io/dynamic-resource-allocation/resourceslice"
 	"k8s.io/klog/v2"
 
 	"sigs.k8s.io/dra-driver-nvidia-gpu/pkg/flock"
@@ -45,6 +46,17 @@ const (
 	// that calls to nodePrepareResource() / nodeUnprepareResource() never
 	// interleave, node-globally.
 	DriverPrepUprepFlockFileName = "pu.lock"
+
+	// defaultKVCacheSlotsPerNode is the number of concurrent DRA claims a node
+	// can host by default. Slots are scheduling handles, not partitions of a
+	// KVCachePool's capacity.
+	defaultKVCacheSlotsPerNode = 16
+
+	// KVCacheSlotDeviceNamePrefix prefixes virtual DRA devices advertised on
+	// every node. The controller binds a ResourceClaim to a cluster-wide
+	// KVCachePool; these devices supply the node-level allocations required to
+	// invoke Prepare.
+	KVCacheSlotDeviceNamePrefix = "kvcache-slot"
 )
 
 // permanentError defines an error indicating that it is permanent.
@@ -98,7 +110,32 @@ func NewDriver(ctx context.Context, config *Config) (*driver, error) {
 	}
 	driver.healthcheck = healthcheck
 
+	if err := driver.pluginhelper.PublishResources(ctx, driver.generateDriverResources(config.flags.nodeName, config.flags.slotsPerNode)); err != nil {
+		return nil, fmt.Errorf("publish KV cache resources: %w", err)
+	}
+
 	return driver, nil
+}
+
+// generateDriverResources returns the virtual KV-cache DRA devices published
+// on this node. v0 does not use a device as a byte-level pool partition:
+// match-or-provision is handled by the cluster controller and Prepare injects
+// the endpoint of the controller-selected cluster-wide KVCachePool.
+func (d *driver) generateDriverResources(nodeName string, slotsPerNode int) resourceslice.DriverResources {
+	devices := make([]resourceapi.Device, slotsPerNode)
+	for i := range devices {
+		devices[i].Name = fmt.Sprintf("%s-%d", KVCacheSlotDeviceNamePrefix, i)
+	}
+
+	return resourceslice.DriverResources{
+		Pools: map[string]resourceslice.Pool{
+			nodeName: {
+				Slices: []resourceslice.Slice{{
+					Devices: devices,
+				}},
+			},
+		},
+	}
 }
 
 func (d *driver) Shutdown() error {
