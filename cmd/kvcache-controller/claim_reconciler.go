@@ -18,12 +18,16 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 
 	resourceapi "k8s.io/api/resource/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	nvapi "sigs.k8s.io/dra-driver-nvidia-gpu/api/nvidia.com/resource/v1beta1"
 )
@@ -52,13 +56,10 @@ func (r *ClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	cfg, err := decodeKVCachePoolConfig(&claim) // scan spec.devices.config for driver kvcache.nvidia.com
+	cfg, err := decodeKVCachePoolConfig(&claim)
 	if err != nil {
-		// Permanent: malformed/invalid claim config will not fix itself on
-		// retry. Log and stop; returning an error would requeue forever.
-		ctrl.LoggerFrom(ctx).Error(err, "invalid KVCachePoolConfig on ResourceClaim; not binding",
-			"claim", req.NamespacedName)
-		return ctrl.Result{}, nil
+		// TerminalError is logged/metrics'd by controller-runtime and is not requeued.
+		return ctrl.Result{}, err
 	}
 	if cfg == nil {
 		return ctrl.Result{}, nil // claim does not target kvcache.nvidia.com
@@ -91,7 +92,7 @@ func decodeKVCachePoolConfig(claim *resourceapi.ResourceClaim) (*nvapi.KVCachePo
 		}
 		obj, err := runtime.Decode(nvapi.StrictDecoder, c.Opaque.Parameters.Raw)
 		if err != nil {
-			return nil, fmt.Errorf("decoding opaque parameters: %w", err)
+			return nil, reconcile.TerminalError(fmt.Errorf("decoding opaque parameters: %w", err))
 		}
 		cfg, ok := obj.(*nvapi.KVCachePoolConfig)
 		if !ok {
@@ -103,21 +104,85 @@ func decodeKVCachePoolConfig(claim *resourceapi.ResourceClaim) (*nvapi.KVCachePo
 		return nil, nil
 	}
 	if err := found.Normalize(); err != nil {
-		return nil, err
+		return nil, reconcile.TerminalError(fmt.Errorf("normalize KVCachePoolConfig: %w", err))
 	}
 	if err := found.Validate(); err != nil {
-		return nil, err
+		return nil, reconcile.TerminalError(fmt.Errorf("invalid KVCachePoolConfig: %w", err))
 	}
 	return found, nil
 }
 
 // matchOrProvision returns the KVCachePool for the given config: the exact
-// pool when cfg.PoolName is set, an existing pool matching the five
-// compatibility keys, or a newly created pool with a deterministic name.
-//
-// TODO(step 3): implement match-or-provision.
+// pool when cfg.PoolName is set, otherwise a pool named from the five
+// compatibility keys. Missing pools are created (get-or-create).
 func (r *ClaimReconciler) matchOrProvision(ctx context.Context, cfg *nvapi.KVCachePoolConfig) (*nvapi.KVCachePool, error) {
-	return nil, fmt.Errorf("matchOrProvision not implemented")
+	name := cfg.PoolName
+	if name == "" {
+		name = deterministicPoolName(cfg)
+	}
+	return r.getOrCreatePool(ctx, name, cfg)
+}
+
+// deterministicPoolName hashes the five compatibility fields into a stable
+// DNS-1123 subdomain. capacityBytes is intentionally excluded so claims that
+// differ only in requested capacity share one pool.
+func deterministicPoolName(cfg *nvapi.KVCachePoolConfig) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s",
+		cfg.Engine, cfg.ModelFamily, cfg.Dtype, cfg.BlockSizeTokens, cfg.LatencyTier)))
+	return fmt.Sprintf("kvcache-%s-%x", cfg.Engine, sum[:8])
+}
+
+func (r *ClaimReconciler) getOrCreatePool(ctx context.Context, name string, cfg *nvapi.KVCachePoolConfig) (*nvapi.KVCachePool, error) {
+	var pool nvapi.KVCachePool
+	err := r.Get(ctx, client.ObjectKey{Name: name}, &pool)
+	if err == nil {
+		if !poolMatchesConfig(&pool, cfg) {
+			return nil, reconcile.TerminalError(fmt.Errorf(
+				"KVCachePool %q exists but is incompatible with claim config (engine=%s modelFamily=%s dtype=%s blockSizeTokens=%d latencyTier=%s)",
+				name, cfg.Engine, cfg.ModelFamily, cfg.Dtype, cfg.BlockSizeTokens, cfg.LatencyTier,
+			))
+		}
+		return &pool, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("get KVCachePool %q: %w", name, err)
+	}
+
+	pool = nvapi.KVCachePool{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: nvapi.KVCachePoolSpec{
+			CapacityBytes:   cfg.CapacityBytes,
+			LatencyTier:     cfg.LatencyTier,
+			Engine:          cfg.Engine,
+			ModelFamily:     cfg.ModelFamily,
+			Dtype:           cfg.Dtype,
+			BlockSizeTokens: cfg.BlockSizeTokens,
+		},
+	}
+	if err := r.Create(ctx, &pool); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// Lost the create race; re-get and validate.
+			if getErr := r.Get(ctx, client.ObjectKey{Name: name}, &pool); getErr != nil {
+				return nil, fmt.Errorf("get KVCachePool %q after create race: %w", name, getErr)
+			}
+			if !poolMatchesConfig(&pool, cfg) {
+				return nil, reconcile.TerminalError(fmt.Errorf(
+					"KVCachePool %q exists but is incompatible with claim config", name,
+				))
+			}
+			return &pool, nil
+		}
+		return nil, fmt.Errorf("create KVCachePool %q: %w", name, err)
+	}
+	return &pool, nil
+}
+
+func poolMatchesConfig(pool *nvapi.KVCachePool, cfg *nvapi.KVCachePoolConfig) bool {
+	return pool.Spec.Engine == cfg.Engine &&
+		pool.Spec.ModelFamily == cfg.ModelFamily &&
+		pool.Spec.Dtype == cfg.Dtype &&
+		pool.Spec.BlockSizeTokens == cfg.BlockSizeTokens &&
+		pool.Spec.LatencyTier == cfg.LatencyTier
 }
 
 func (r *ClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
