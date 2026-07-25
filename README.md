@@ -1,8 +1,52 @@
 # dra-driver-nvidia-kvcache (WIP)
 
-Experimental fork of `dra-driver-nvidia-gpu` exploring Kubernetes-native distributed KV cache primitives.
+Experimental fork of `dra-driver-nvidia-gpu` exploring Kubernetes-native
+distributed KV cache primitives. See [`plans/v0.md`](plans/v0.md) for scope.
 
 Work in progress. Documentation will evolve alongside implementation.
+
+## KV cache design (v0)
+
+### DeviceClass
+
+DRA requires every device request to name a `DeviceClass`. In v0 that class is
+a one-time, admin-installed gateway — not where pool configuration lives.
+
+- Ship **one** minimal DeviceClass (e.g. `kvcache.nvidia.com`) whose selector
+  matches devices published by the `kvcache.nvidia.com` driver.
+- Put the full `KVCachePoolConfig` (engine, model family, dtype, block size,
+  latency tier, capacity, optional `poolName`) in the **ResourceClaim**.
+- Do **not** put compatibility fields on the DeviceClass. An empty class is
+  normal DRA practice here (same pattern as this repo's GPU DeviceClasses):
+  class = device category, claim = per-workload parameters.
+- Per-engine DeviceClasses (`…/lmcache-vllm`, etc.) are not used in v0. Under
+  claim-driven matching they would not affect which pool a claim binds to, so
+  they would be cosmetic.
+
+Admin-gated "pool flavors" (full config on DeviceClass, claim only requests
+capacity) are a possible later governance mode. They are out of scope for v0.
+
+### Match-or-provision and pool identity
+
+Compatible claims share one cluster-scoped `KVCachePool`. Compatibility is
+defined by: engine, model family, dtype, block size, latency tier.
+`capacityBytes` is per-claim and is not part of pool identity.
+
+| Claim input | Behavior |
+| --- | --- |
+| `poolName` unset | Derive a deterministic pool name from the five compatibility fields. Get that pool, or create it if missing. Same config → same name → shared pool. |
+| `poolName` set | Use that literal name. Skip config-based matching. Get-or-create the named pool using the claim's config. |
+
+Explicit `poolName` is the escape hatch when two workloads have identical
+compatibility fields but must **not** share a cache (tenancy, prod vs staging,
+isolation). Example: `team-a-llama3` and `team-b-llama3` become two real pools
+under those exact names; they are not collapsed into one hashed pool.
+
+The cluster controller owns match-or-provision and writes the chosen pool onto
+the claim (`kvcache.nvidia.com/kvcache-pool-name`). The kubelet plugin only
+reads that binding (or an explicit `poolName`) and injects the pool endpoint.
+
+---
 
 # DRA Driver for NVIDIA GPUs
 

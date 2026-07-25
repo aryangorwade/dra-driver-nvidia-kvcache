@@ -129,7 +129,7 @@ must use an explicit `poolName` referring to a pre-created Ready pool.
 - Generate and ship the `KVCachePool` CRD.
 - Add RBAC for the plugin and controller.
 - Add kubelet-plugin DaemonSet and controller Deployment manifests.
-- Define DeviceClasses, initially one per engine.
+- Define one minimal DeviceClass (`kvcache.nvidia.com`); config stays on claims.
 - Define an LMCache Deployment/Service template or generated workload.
 - Add example `ResourceClaim` and pod manifests.
 - Wire engine startup to the injected endpoint:

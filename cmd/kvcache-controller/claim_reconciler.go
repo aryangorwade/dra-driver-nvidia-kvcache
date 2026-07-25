@@ -54,8 +54,11 @@ func (r *ClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	cfg, err := decodeKVCachePoolConfig(&claim) // scan spec.devices.config for driver kvcache.nvidia.com
 	if err != nil {
-		// Malformed config: surface the error; do not bind.
-		return ctrl.Result{}, err
+		// Permanent: malformed/invalid claim config will not fix itself on
+		// retry. Log and stop; returning an error would requeue forever.
+		ctrl.LoggerFrom(ctx).Error(err, "invalid KVCachePoolConfig on ResourceClaim; not binding",
+			"claim", req.NamespacedName)
+		return ctrl.Result{}, nil
 	}
 	if cfg == nil {
 		return ctrl.Result{}, nil // claim does not target kvcache.nvidia.com
@@ -80,11 +83,32 @@ func (r *ClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 // decodeKVCachePoolConfig scans the claim's spec-level opaque device configs
 // for one addressed to this driver and decodes it as a KVCachePoolConfig.
 // Returns (nil, nil) when the claim does not target this driver.
-//
-// TODO(step 2): implement decoding from claim.Spec.Devices.Config using
-// nvapi.StrictDecoder.
 func decodeKVCachePoolConfig(claim *resourceapi.ResourceClaim) (*nvapi.KVCachePoolConfig, error) {
-	return nil, nil
+	var found *nvapi.KVCachePoolConfig
+	for _, c := range claim.Spec.Devices.Config {
+		if c.Opaque == nil || c.Opaque.Driver != DriverName {
+			continue
+		}
+		obj, err := runtime.Decode(nvapi.StrictDecoder, c.Opaque.Parameters.Raw)
+		if err != nil {
+			return nil, fmt.Errorf("decoding opaque parameters: %w", err)
+		}
+		cfg, ok := obj.(*nvapi.KVCachePoolConfig)
+		if !ok {
+			continue // non KVCachePoolCOnfig kind in our API group
+		}
+		found = cfg // later entries win
+	}
+	if found == nil {
+		return nil, nil
+	}
+	if err := found.Normalize(); err != nil {
+		return nil, err
+	}
+	if err := found.Validate(); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 // matchOrProvision returns the KVCachePool for the given config: the exact
